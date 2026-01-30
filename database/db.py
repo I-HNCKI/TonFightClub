@@ -646,6 +646,18 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetchval("SELECT COUNT(*) FROM players") or 0
 
+    async def get_system_balance(self) -> int:
+        """Алиас: банк системы (total_commission)."""
+        return await self.get_system_commission()
+
+    async def reset_system_balance(self) -> None:
+        """Алиас: обнулить кассу."""
+        await self.reset_commission()
+
+    async def get_total_players_count(self) -> int:
+        """Алиас: всего игроков."""
+        return await self.get_players_count()
+
     async def get_battles_count(self) -> int:
         async with self.pool.acquire() as conn:
             return await conn.fetchval("SELECT COUNT(*) FROM battles") or 0
