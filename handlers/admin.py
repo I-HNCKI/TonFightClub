@@ -10,7 +10,7 @@ from database.db import db
 
 router = Router(name="admin")
 
-ADMIN_IDS = [413550666, 695574514]
+ADMIN_IDS = [306039666]
 
 
 def _admin_keyboard():
