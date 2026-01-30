@@ -52,14 +52,14 @@ class Database:
                     username TEXT
                 )
             """)
-            # player_stats (current_hp, hp_updated_at — для травм арены, восстановление 1 HP/мин)
+            # player_stats (stamina default 1 для ребаланса)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS player_stats (
                     player_id INTEGER PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
-                    strength INTEGER NOT NULL DEFAULT 3,
-                    agility INTEGER NOT NULL DEFAULT 3,
-                    intuition INTEGER NOT NULL DEFAULT 3,
-                    stamina INTEGER NOT NULL DEFAULT 3,
+                    strength INTEGER NOT NULL DEFAULT 1,
+                    agility INTEGER NOT NULL DEFAULT 1,
+                    intuition INTEGER NOT NULL DEFAULT 1,
+                    stamina INTEGER NOT NULL DEFAULT 1,
                     free_points INTEGER NOT NULL DEFAULT 0,
                     credits INTEGER NOT NULL DEFAULT 0,
                     experience INTEGER NOT NULL DEFAULT 0,
@@ -74,7 +74,7 @@ class Database:
                 await conn.execute("ALTER TABLE player_stats ADD COLUMN IF NOT EXISTS trauma_end_at TIMESTAMP WITH TIME ZONE")
             except Exception:
                 pass
-            # items (slot: weapon, chest, legs, potion)
+            # items (slot: weapon, chest, legs, potion; armor для поглощения урона)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS items (
                     id SERIAL PRIMARY KEY,
@@ -84,6 +84,7 @@ class Database:
                     max_damage INTEGER NOT NULL DEFAULT 0,
                     bonus_str INTEGER NOT NULL DEFAULT 0,
                     bonus_hp INTEGER NOT NULL DEFAULT 0,
+                    armor INTEGER NOT NULL DEFAULT 0,
                     price INTEGER NOT NULL DEFAULT 0
                 )
             """)
@@ -105,7 +106,7 @@ class Database:
                     PRIMARY KEY (player_id, item_id)
                 )
             """)
-            # PvP battles
+            # PvP battles (potion_used — зелье 1 раз за бой, Free Action)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS battles (
                     id SERIAL PRIMARY KEY,
@@ -123,7 +124,9 @@ class Database:
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                     p1_msg_id INTEGER,
                     p2_msg_id INTEGER,
-                    stake INTEGER NOT NULL DEFAULT 0
+                    stake INTEGER NOT NULL DEFAULT 0,
+                    p1_potion_used BOOLEAN NOT NULL DEFAULT FALSE,
+                    p2_potion_used BOOLEAN NOT NULL DEFAULT FALSE
                 )
             """)
             
@@ -131,6 +134,8 @@ class Database:
             try:
                 await conn.execute("ALTER TABLE battles ADD COLUMN IF NOT EXISTS p1_msg_id INTEGER")
                 await conn.execute("ALTER TABLE battles ADD COLUMN IF NOT EXISTS p2_msg_id INTEGER")
+                await conn.execute("ALTER TABLE battles ADD COLUMN IF NOT EXISTS p1_potion_used BOOLEAN NOT NULL DEFAULT FALSE")
+                await conn.execute("ALTER TABLE battles ADD COLUMN IF NOT EXISTS p2_potion_used BOOLEAN NOT NULL DEFAULT FALSE")
             except Exception:
                 pass
 
@@ -141,7 +146,7 @@ class Database:
                     joined_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 )
             """)
-            # Shadow fights (PvE vs AI)
+            # Shadow fights (PvE vs AI; potion_used — зелье 1 раз за бой)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS shadow_fights (
                     id SERIAL PRIMARY KEY,
@@ -149,9 +154,14 @@ class Database:
                     shadow_hp INTEGER NOT NULL,
                     player_hp INTEGER NOT NULL,
                     round INTEGER NOT NULL DEFAULT 1,
-                    is_finished BOOLEAN NOT NULL DEFAULT FALSE
+                    is_finished BOOLEAN NOT NULL DEFAULT FALSE,
+                    potion_used BOOLEAN NOT NULL DEFAULT FALSE
                 )
             """)
+            try:
+                await conn.execute("ALTER TABLE shadow_fights ADD COLUMN IF NOT EXISTS potion_used BOOLEAN NOT NULL DEFAULT FALSE")
+            except Exception:
+                pass
             # System balance (commission)
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS system_balance (
@@ -161,6 +171,7 @@ class Database:
             """)
             try:
                 await conn.execute("ALTER TABLE battles ADD COLUMN IF NOT EXISTS stake INTEGER NOT NULL DEFAULT 0")
+                await conn.execute("ALTER TABLE items ADD COLUMN IF NOT EXISTS armor INTEGER NOT NULL DEFAULT 0")
             except Exception:
                 pass
         await self._init_system_balance()
@@ -181,18 +192,18 @@ class Database:
                 has_potion = await conn.fetchval("SELECT 1 FROM items WHERE slot = 'potion' LIMIT 1")
                 if not has_potion:
                     await conn.execute("""
-                        INSERT INTO items (name, slot, min_damage, max_damage, bonus_str, bonus_hp, price)
-                        VALUES ('Малое зелье жизни', 'potion', 0, 0, 0, 0, 50)
+                        INSERT INTO items (name, slot, min_damage, max_damage, bonus_str, bonus_hp, armor, price)
+                        VALUES ('Малое зелье жизни', 'potion', 0, 0, 0, 0, 0, 50)
                     """)
                 return
             await conn.execute("""
-                INSERT INTO items (name, slot, min_damage, max_damage, bonus_str, bonus_hp, price)
+                INSERT INTO items (name, slot, min_damage, max_damage, bonus_str, bonus_hp, armor, price)
                 VALUES
-                    ('Нож', 'weapon', 1, 3, 0, 0, 10),
-                    ('Меч', 'weapon', 3, 6, 0, 0, 25),
-                    ('Броня', 'chest', 0, 0, 0, 15, 30),
-                    ('Ржавый нож', 'weapon', 1, 2, 0, 0, 3),
-                    ('Малое зелье жизни', 'potion', 0, 0, 0, 0, 50)
+                    ('Нож', 'weapon', 1, 3, 0, 0, 0, 10),
+                    ('Меч', 'weapon', 3, 6, 0, 0, 0, 25),
+                    ('Броня', 'chest', 0, 0, 0, 0, 10, 30),
+                    ('Ржавый нож', 'weapon', 1, 2, 0, 0, 0, 3),
+                    ('Малое зелье жизни', 'potion', 0, 0, 0, 0, 0, 50)
             """)
         logger.info("Initial items added")
 
@@ -218,7 +229,7 @@ class Database:
             )
             pid = row["id"]
             await conn.execute(
-                "INSERT INTO player_stats (player_id) VALUES ($1)",
+                "INSERT INTO player_stats (player_id, strength, agility, intuition, stamina) VALUES ($1, 1, 1, 1, 1)",
                 pid,
             )
             return dict(row)
@@ -255,7 +266,7 @@ class Database:
             base = dict(base)
             rows = await conn.fetch(
                 """
-                SELECT i.bonus_str, i.bonus_hp, i.min_damage, i.max_damage
+                SELECT i.bonus_str, i.bonus_hp, i.armor, i.min_damage, i.max_damage
                 FROM inventory inv
                 JOIN items i ON i.id = inv.item_id
                 WHERE inv.player_id = $1 AND inv.is_equipped = TRUE
@@ -263,7 +274,8 @@ class Database:
                 player_id,
             )
             bonus_str = sum(r["bonus_str"] for r in rows)
-            bonus_hp = sum(r["bonus_hp"] for r in rows)
+            bonus_hp = sum(r.get("bonus_hp", 0) for r in rows)
+            armor = sum(r.get("armor", 0) for r in rows)
             weapon_min = 0
             weapon_max = 0
             for r in rows:
@@ -273,7 +285,9 @@ class Database:
                     break
             strength = base["strength"] + bonus_str
             stamina = base["stamina"]
-            max_hp = stamina * 5 + bonus_hp
+            level = base.get("level", 1)
+            # MaxHP = 30 + (level * 5) + (stamina * 5)
+            max_hp = 30 + (level * 5) + (stamina * 5)
             hp_value = max_hp
             if for_arena and base.get("current_hp") is not None and base.get("hp_updated_at"):
                 import datetime
@@ -301,7 +315,7 @@ class Database:
                 "stamina": stamina,
                 "hp": hp_value,
                 "max_hp": max_hp,
-                "bonus_hp": bonus_hp,
+                "armor": armor,
                 "weapon_min": weapon_min,
                 "weapon_max": weapon_max if weapon_max else weapon_min,
                 "free_points": base["free_points"],
@@ -320,7 +334,7 @@ class Database:
         await self._process_level_up(player_id)
 
     async def _process_level_up(self, player_id: int) -> None:
-        """При exp >= level*100: уровень +1, игроку +5 stats_points (free_points)."""
+        """XP Curve: exp >= (level**2)*100 → уровень +1, experience -= spent, +5 free_points."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT experience, level FROM player_stats WHERE player_id = $1",
@@ -329,13 +343,14 @@ class Database:
             if not row:
                 return
             exp, lvl = row["experience"], row["level"]
-            new_lvl = 1 + exp // 100
-            if new_lvl > lvl:
-                add_pts = (new_lvl - lvl) * 5
+            exp_to_next = (lvl ** 2) * 100
+            if exp >= exp_to_next:
+                new_exp = exp - exp_to_next
                 await conn.execute(
-                    "UPDATE player_stats SET level = $1, free_points = free_points + $2 WHERE player_id = $3",
-                    new_lvl, add_pts, player_id,
+                    "UPDATE player_stats SET level = level + 1, experience = $1, free_points = free_points + 5 WHERE player_id = $2",
+                    new_exp, player_id,
                 )
+                await self._process_level_up(player_id)  # рекурсия на случай нескольких уровней
 
     async def add_credits(self, player_id: int, amount: int) -> None:
         async with self.pool.acquire() as conn:
@@ -448,7 +463,7 @@ class Database:
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT inv.id, inv.item_id, inv.is_equipped, i.name, i.slot, i.min_damage, i.max_damage, i.bonus_str, i.bonus_hp, i.price
+                SELECT inv.id, inv.item_id, inv.is_equipped, i.name, i.slot, i.min_damage, i.max_damage, i.bonus_str, i.bonus_hp, COALESCE(i.armor, 0) AS armor, i.price
                 FROM inventory inv
                 JOIN items i ON i.id = inv.item_id
                 WHERE inv.player_id = $1
@@ -653,7 +668,7 @@ class Database:
     async def get_shadow_fight(self, fight_id: int) -> Optional[dict]:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, player_id, shadow_hp, player_hp, round, is_finished FROM shadow_fights WHERE id = $1",
+                "SELECT id, player_id, shadow_hp, player_hp, round, is_finished, COALESCE(potion_used, FALSE) AS potion_used FROM shadow_fights WHERE id = $1",
                 fight_id,
             )
             return dict(row) if row else None
@@ -662,7 +677,7 @@ class Database:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, player_id, shadow_hp, player_hp, round, is_finished
+                SELECT id, player_id, shadow_hp, player_hp, round, is_finished, COALESCE(potion_used, FALSE) AS potion_used
                 FROM shadow_fights
                 WHERE player_id = $1 AND is_finished = FALSE
                 ORDER BY id DESC LIMIT 1
@@ -680,28 +695,55 @@ class Database:
         return arena_b is not None
 
     async def start_shadow_fight(self, player_id: int) -> Optional[dict]:
-        """Создаёт бой против Тени. Статы Тени = статы игрока, HP Тени = 20."""
+        """Создаёт бой против Тени. Статы Тени = статы игрока, HP Тени фиксировано (честный тест)."""
         stats = await self.get_combat_stats(player_id)
         if not stats:
             return None
         player_hp = stats["hp"]
-        shadow_hp = 20
+        shadow_hp = 40  # фиксированное HP для честного теста
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO shadow_fights (player_id, shadow_hp, player_hp, round, is_finished)
-                VALUES ($1, $2, $3, 1, FALSE)
+                INSERT INTO shadow_fights (player_id, shadow_hp, player_hp, round, is_finished, potion_used)
+                VALUES ($1, $2, $3, 1, FALSE, FALSE)
                 RETURNING id, player_id, shadow_hp, player_hp, round, is_finished
                 """,
                 player_id, shadow_hp, player_hp,
             )
             return dict(row) if row else None
 
+    async def use_potion_shadow(self, fight_id: int, player_id: int) -> tuple[bool, int, str]:
+        """Free Action: зелье 1 раз за бой, не тратит ход. Восстанавливает 25% MaxHP (округление вверх)."""
+        fight = await self.get_shadow_fight(fight_id)
+        if not fight or fight["is_finished"]:
+            return False, 0, "Бой завершён."
+        if fight.get("potion_used"):
+            return False, 0, "Вы уже использовали эликсир в этом бою!"
+        potion_id = await self.get_potion_item_id()
+        if not potion_id or await self.get_potion_count(player_id, potion_id) < 1:
+            return False, 0, "Нет зелий."
+        stats = await self.get_combat_stats(player_id)
+        max_hp = stats.get("max_hp", 40)
+        import math
+        heal = math.ceil(max_hp * 0.25)
+        current_hp = fight["player_hp"]
+        new_hp = min(max_hp, current_hp + heal)
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE player_potions SET quantity = quantity - 1 WHERE player_id = $1 AND item_id = $2 AND quantity >= 1",
+                player_id, potion_id,
+            )
+            await conn.execute(
+                "UPDATE shadow_fights SET player_hp = $1, potion_used = TRUE WHERE id = $2",
+                new_hp, fight_id,
+            )
+        return True, new_hp, f"Зелье выпито. +{heal} HP (25% от макс.)."
+
     async def process_shadow_turn(
         self, fight_id: int, player_atk: int, player_blk: int
-    ) -> tuple[Optional[dict], Optional[dict], list[str], bool]:
+    ) -> tuple[Optional[dict], Optional[dict], list[str], bool, bool]:
         """
-        ИИ Тени выбирает рандомные зоны. player_atk=0, player_blk=0 = хил (−1 зелье, +50% HP), потом тень бьёт.
+        ИИ Тени выбирает рандомные зоны. Зелье — Free Action в handler (use_potion_shadow), сюда не передаётся.
         """
         import random
         fight = await self.get_shadow_fight(fight_id)
@@ -713,40 +755,36 @@ class Database:
             return None, None, [], False, False
 
         player_hp = fight["player_hp"]
-        if player_atk == 0 and player_blk == 0:
-            potion_id = await self.get_potion_item_id()
-            if potion_id and await self.get_potion_count(player_id, potion_id) >= 1:
-                max_hp = stats.get("max_hp", 50)
-                player_hp = min(max_hp, player_hp + max(1, max_hp // 2))
-                async with self.pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE player_potions SET quantity = quantity - 1 WHERE player_id = $1 AND item_id = $2 AND quantity >= 1",
-                        player_id, potion_id,
-                    )
-            # Ход только на хил: в resolve_round оставляем 0,0 — игрок не бьёт, только тень
-
         shadow_atk = random.randint(1, 3)
         shadow_blk = random.randint(1, 3)
         from services.game_math import BattleMath, CombatStats
+        wmin, wmax = stats.get("weapon_min", 1), stats.get("weapon_max", 2)
+        lvl, arm = stats.get("level", 1), stats.get("armor", 0)
+        max_hp = stats.get("max_hp", 40)
         player_combat: CombatStats = {
             "strength": stats["strength"],
             "agility": stats["agility"],
             "intuition": stats["intuition"],
             "stamina": stats["stamina"],
             "hp": player_hp,
-            "weapon_min": stats.get("weapon_min", 1),
-            "weapon_max": stats.get("weapon_max", 2),
+            "max_hp": max_hp,
+            "weapon_min": wmin,
+            "weapon_max": wmax,
+            "armor": arm,
+            "level": lvl,
         }
-        # Тень слабее на 20% по урону
-        wmin, wmax = stats.get("weapon_min", 1), stats.get("weapon_max", 2)
+        # Тень = зеркало статов игрока, то же оружие и броня
         shadow_combat: CombatStats = {
             "strength": stats["strength"],
             "agility": stats["agility"],
             "intuition": stats["intuition"],
             "stamina": stats["stamina"],
             "hp": fight["shadow_hp"],
-            "weapon_min": max(1, int(wmin * 0.8)),
-            "weapon_max": max(1, int(wmax * 0.8)),
+            "max_hp": max_hp,
+            "weapon_min": wmin,
+            "weapon_max": wmax,
+            "armor": arm,
+            "level": lvl,
         }
         new_player_hp, new_shadow_hp, log_lines = BattleMath.resolve_round(
             player_combat, shadow_combat,
@@ -767,13 +805,16 @@ class Database:
         updated = await self.get_shadow_fight(fight_id)
         player_won = is_finished and new_shadow_hp <= 0
         old_level = stats.get("level", 1)
+        # Награды: победа 20 + Lvl*5 XP, 10 + Lvl*2 золота; поражение 50% XP, 30% золота
+        xp_win = 20 + (old_level * 5)
+        gold_win = 10 + (old_level * 2)
         if player_won:
-            await self.add_credits(player_id, 20)
-            await self.add_experience(player_id, 50)
+            await self.add_credits(player_id, gold_win)
+            await self.add_experience(player_id, xp_win)
         else:
             if is_finished:
-                await self.add_credits(player_id, 6)
-                await self.add_experience(player_id, 25)
+                await self.add_credits(player_id, max(1, int(gold_win * 0.3)))
+                await self.add_experience(player_id, max(1, int(xp_win * 0.5)))
         if is_finished:
             await self.restore_player_hp_full(player_id)
         new_stats = await self.get_combat_stats(player_id)
@@ -876,29 +917,33 @@ class Database:
         return True, "Ход принят."
 
     async def make_heal_arena(self, battle_id: int, player_id: int) -> tuple[bool, str]:
-        """Хил в арене: −1 зелье, +50% max_hp к текущему HP, ход = (0,0)."""
+        """Free Action: зелье 1 раз за бой, не тратит ход. 25% MaxHP (округление вверх). Не меняет attack/block."""
         battle = await self.get_battle(battle_id)
         if not battle or battle["is_finished"]:
             return False, "Бой завершён."
-        pid = battle["player1_id"] if battle["player1_id"] == player_id else battle["player2_id"]
         col_hp = "player1_hp" if battle["player1_id"] == player_id else "player2_hp"
-        col_atk, col_blk = ("p1_attack_zone", "p1_block_zone") if battle["player1_id"] == player_id else ("p2_attack_zone", "p2_block_zone")
-        if battle[col_atk] is not None:
-            return False, "Вы уже сделали ход."
+        col_potion = "p1_potion_used" if battle["player1_id"] == player_id else "p2_potion_used"
+        if battle.get(col_potion):
+            return False, "Вы уже использовали эликсир в этом бою!"
         potion_id = await self.get_potion_item_id()
         if not potion_id or await self.get_potion_count(player_id, potion_id) < 1:
             return False, "Нет зелий."
-        stats = await self.get_combat_stats(pid)
-        max_hp = stats.get("max_hp", 50)
+        stats = await self.get_combat_stats(battle["player1_id"] if battle["player1_id"] == player_id else battle["player2_id"])
+        max_hp = stats.get("max_hp", 40)
+        import math
+        heal = math.ceil(max_hp * 0.25)
         current_hp = battle[col_hp]
-        new_hp = min(max_hp, current_hp + max(1, max_hp // 2))
+        new_hp = min(max_hp, current_hp + heal)
         async with self.pool.acquire() as conn:
             await conn.execute(
                 "UPDATE player_potions SET quantity = quantity - 1 WHERE player_id = $1 AND item_id = $2 AND quantity >= 1",
                 player_id, potion_id,
             )
-            await conn.execute(f"UPDATE battles SET {col_hp} = $1, {col_atk} = 0, {col_blk} = 0 WHERE id = $2", new_hp, battle_id)
-        return True, "Зелье выпито. +50% HP."
+            await conn.execute(
+                f"UPDATE battles SET {col_hp} = $1, {col_potion} = TRUE WHERE id = $2",
+                new_hp, battle_id,
+            )
+        return True, f"Зелье выпито. +{heal} HP (25% от макс.). Выберите атаку и защиту."
 
     async def check_round_ready(self, battle_id: int) -> bool:
         b = await self.get_battle(battle_id)

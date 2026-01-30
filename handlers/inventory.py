@@ -12,12 +12,31 @@ from database.db import db
 router = Router(name="inventory")
 
 
+def _armor_percent(armor: int) -> int:
+    """Поглощение в %: armor / (armor + 50)."""
+    if armor <= 0:
+        return 0
+    return int(100 * armor / (armor + 50))
+
+
 def _inv_lines(items: list[dict]) -> list[str]:
-    return [
-        f"• {inv['name']} ({inv['slot']}) — урон {inv['min_damage']}-{inv['max_damage']}, +{inv['bonus_str']} сил, +{inv['bonus_hp']} HP"
-        + (" [надето]" if inv["is_equipped"] else "")
-        for inv in items
-    ]
+    lines = []
+    for inv in items:
+        parts = [f"• {inv['name']} ({inv['slot']})"]
+        if inv.get("min_damage") or inv.get("max_damage"):
+            parts.append(f" урон {inv['min_damage']}-{inv['max_damage']}")
+        if inv.get("bonus_str"):
+            parts.append(f", +{inv['bonus_str']} сил")
+        if inv.get("bonus_hp"):
+            parts.append(f", +{inv['bonus_hp']} HP")
+        armor = inv.get("armor", 0)
+        if armor:
+            pct = _armor_percent(armor)
+            parts.append(f", 🛡 Броня: {armor} ({pct}% поглощения)")
+        if inv.get("is_equipped"):
+            parts.append(" [надето]")
+        lines.append("".join(parts))
+    return lines
 
 
 @router.message(F.text == "🎒 Инвентарь")
