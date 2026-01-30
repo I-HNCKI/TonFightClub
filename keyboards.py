@@ -9,16 +9,15 @@ def main_menu() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text="📋 Профиль"),
-        KeyboardButton(text="⚔ Бой (манекен)"),
-    )
-    builder.row(
-        KeyboardButton(text="🎒 Инвентарь"),
-        KeyboardButton(text="🛒 Магазин"),
-    )
-    # Добавили кнопку Топ игроков рядом с Ареной
-    builder.row(
         KeyboardButton(text="🏟 Арена (PvP)"),
-        KeyboardButton(text="🏆 Топ игроков")
+    )
+    builder.row(
+        KeyboardButton(text="👥 Бой с тенью"),
+        KeyboardButton(text="🎒 Инвентарь"),
+    )
+    builder.row(
+        KeyboardButton(text="🛒 Магазин"),
+        KeyboardButton(text="🏆 Топ игроков"),
     )
     return builder.as_markup(resize_keyboard=True)
 
@@ -37,10 +36,62 @@ def profile_upgrade_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# ----- Battle (PvE) -----
-def battle_pve_keyboard() -> InlineKeyboardMarkup:
+# Зоны: 1=Голова, 2=Корпус, 3=Ноги
+ZONE_NAMES = {1: "Голова", 2: "Корпус", 3: "Ноги"}
+
+
+def _zone_btn(label: str, prefix: str, zone: int, selected: bool) -> InlineKeyboardButton:
+    text = f"✅ {label}" if selected else label
+    return InlineKeyboardButton(text=text, callback_data=f"{prefix}_{zone}")
+
+
+# ----- Шахматка: два столбца (Атака | Защита), зоны 1–3. Кнопка "ПОДТВЕРДИТЬ УДАР" только при выборе атаки и защиты.
+def arena_move_keyboard(selected_atk: int | None = None, selected_def: int | None = None) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="⚔ Ударить манекен", callback_data="pve_hit"))
+    # Ряд: Атака — три зоны
+    row_atk = [
+        _zone_btn("Атака: " + ZONE_NAMES[1], "move_atk", 1, selected_atk == 1),
+        _zone_btn("Атака: " + ZONE_NAMES[2], "move_atk", 2, selected_atk == 2),
+        _zone_btn("Атака: " + ZONE_NAMES[3], "move_atk", 3, selected_atk == 3),
+    ]
+    builder.row(*row_atk)
+    # Ряд: Защита — три зоны
+    row_def = [
+        _zone_btn("Защита: " + ZONE_NAMES[1], "move_def", 1, selected_def == 1),
+        _zone_btn("Защита: " + ZONE_NAMES[2], "move_def", 2, selected_def == 2),
+        _zone_btn("Защита: " + ZONE_NAMES[3], "move_def", 3, selected_def == 3),
+    ]
+    builder.row(*row_def)
+    if selected_atk is not None and selected_def is not None:
+        builder.row(InlineKeyboardButton(text="⚔ ПОДТВЕРДИТЬ УДАР", callback_data="move_confirm"))
+    builder.row(
+        InlineKeyboardButton(text="🎲 Автобой", callback_data="move_auto"),
+        InlineKeyboardButton(text="🧪 Хил", callback_data="move_heal"),
+    )
+    builder.row(InlineKeyboardButton(text="🏳 Сдаться", callback_data="surrender"))
+    return builder.as_markup()
+
+
+def shadow_move_keyboard(selected_atk: int | None = None, selected_def: int | None = None) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    row_atk = [
+        _zone_btn("Атака: " + ZONE_NAMES[1], "shadow_atk", 1, selected_atk == 1),
+        _zone_btn("Атака: " + ZONE_NAMES[2], "shadow_atk", 2, selected_atk == 2),
+        _zone_btn("Атака: " + ZONE_NAMES[3], "shadow_atk", 3, selected_atk == 3),
+    ]
+    builder.row(*row_atk)
+    row_def = [
+        _zone_btn("Защита: " + ZONE_NAMES[1], "shadow_def", 1, selected_def == 1),
+        _zone_btn("Защита: " + ZONE_NAMES[2], "shadow_def", 2, selected_def == 2),
+        _zone_btn("Защита: " + ZONE_NAMES[3], "shadow_def", 3, selected_def == 3),
+    ]
+    builder.row(*row_def)
+    if selected_atk is not None and selected_def is not None:
+        builder.row(InlineKeyboardButton(text="⚔ ПОДТВЕРДИТЬ УДАР", callback_data="shadow_confirm"))
+    builder.row(
+        InlineKeyboardButton(text="🎲 Автобой", callback_data="shadow_auto"),
+        InlineKeyboardButton(text="🧪 Хил", callback_data="shadow_heal"),
+    )
     return builder.as_markup()
 
 
@@ -49,21 +100,6 @@ def arena_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="🔍 Найти соперника", callback_data="arena_find"))
     builder.row(InlineKeyboardButton(text="❌ Выйти из очереди", callback_data="arena_leave"))
-    return builder.as_markup()
-
-
-# Zones: 1=голова, 2=корпус, 3=ноги. Callback move_A_B = attack zone A, block zone B
-def arena_move_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    zones = [(1, "голова"), (2, "корпус"), (3, "ноги")]
-    for atk_z, atk_name in zones:
-        for blk_z, blk_name in zones:
-            builder.row(
-                InlineKeyboardButton(
-                    text=f"Удар: {atk_name} | Блок: {blk_name}",
-                    callback_data=f"move_{atk_z}_{blk_z}",
-                )
-            )
     return builder.as_markup()
 
 

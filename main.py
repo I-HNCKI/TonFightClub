@@ -11,8 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from database.db import db
-# 1. ДОБАВИЛ top В ИМПОРТЫ
-from handlers import start, profile, battle, arena, inventory, shop, top
+from handlers import start, profile, shadow_fight, arena, inventory, shop, top, admin
 
 load_dotenv()
 
@@ -36,15 +35,14 @@ async def main() -> None:
     
     await db.connect()
 
-    # Подключаем роутеры (обработчики команд)
     dp.include_router(start.router)
     dp.include_router(profile.router)
-    dp.include_router(battle.router)
+    dp.include_router(shadow_fight.router)
     dp.include_router(arena.router)
     dp.include_router(inventory.router)
     dp.include_router(shop.router)
-    # 2. ПОДКЛЮЧИЛ РОУТЕР ТОПА
     dp.include_router(top.router)
+    dp.include_router(admin.router)
 
     try:
         logger.info("Bot starting...")

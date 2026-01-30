@@ -14,25 +14,30 @@ router = Router(name="profile")
 def format_stats(stats: dict) -> str:
     return (
         f"📋 <b>Профиль</b>\n\n"
-        f"Сила: {stats.get('strength', 0)}\n"
-        f"Ловкость: {stats.get('agility', 0)}\n"
-        f"Интуиция: {stats.get('intuition', 0)}\n"
-        f"Выносливость: {stats.get('stamina', 0)}\n"
+        f"Сила: {stats.get('strength', 0)} [+]\n"
+        f"Ловкость: {stats.get('agility', 0)} [+]\n"
+        f"Интуиция: {stats.get('intuition', 0)} [+]\n"
+        f"Выносливость: {stats.get('stamina', 0)} [+]\n"
         f"HP: {stats.get('hp', 0)}\n\n"
-        f"Свободные очки: {stats.get('free_points', 0)}\n"
-        f"Кредиты: {stats.get('credits', 0)}\n"
-        f"Опыт: {stats.get('experience', 0)} | Уровень: {stats.get('level', 1)}\n\n"
-        f"Прокачка за свободные очки:"
+        f"🎖 Очки статов (свободные): <b>{stats.get('free_points', 0)}</b>\n"
+        f"💰 Кредиты: {stats.get('credits', 0)}\n"
+        f"📊 Опыт: {stats.get('experience', 0)} | Уровень: {stats.get('level', 1)}\n\n"
+        f"Распределите очки статов (кнопки ниже):"
     )
 
 
 @router.message(F.text == "📋 Профиль")
 @router.message(Command("profile"))
 async def profile_menu(message: Message) -> None:
-    
     player = await db.get_player_by_telegram_id(message.from_user.id if message.from_user else 0)
     if not player:
         await message.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await message.answer(
+            "🛑 <b>Вы в бою!</b>\n\nСначала завершите поединок (выход = поражение).",
+            parse_mode="HTML",
+        )
         return
     stats = await db.get_combat_stats(player["id"])
     if not stats:
@@ -47,6 +52,13 @@ async def profile_menu(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("stat_"))
 async def profile_upgrade(callback: CallbackQuery) -> None:
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою! Сначала завершите поединок (выход = поражение).", show_alert=True)
+        return
     if callback.data == "stat_strength":
         stat = "strength"
     elif callback.data == "stat_agility":
@@ -57,11 +69,6 @@ async def profile_upgrade(callback: CallbackQuery) -> None:
         stat = "stamina"
     else:
         await callback.answer("Неизвестная кнопка")
-        return
-    
-    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
-    if not player:
-        await callback.answer("Сначала /start")
         return
     ok = await db.upgrade_stat(player["id"], stat)
     if not ok:

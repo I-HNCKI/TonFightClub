@@ -14,11 +14,17 @@ router = Router(name="shop")
 @router.message(F.text == "🛒 Магазин")
 @router.message(Command("shop"))
 async def shop_menu(message: Message) -> None:
-    
     player = await db.get_player_by_telegram_id(message.from_user.id if message.from_user else 0)
     if not player:
         await message.answer("Сначала /start")
         return
+    if await db.has_active_fight(player["id"]):
+        await message.answer(
+            "🛑 <b>Вы в бою!</b>\n\nСначала завершите поединок (выход = поражение).",
+            parse_mode="HTML",
+        )
+        return
+        
     stats = await db.get_combat_stats(player["id"])
     items = await db.get_shop_items()
     credits = stats.get("credits", 0)
@@ -31,12 +37,15 @@ async def shop_menu(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("shop_item_"))
 async def shop_item_view(callback: CallbackQuery) -> None:
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if player and await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою! Сначала завершите поединок (выход = поражение).", show_alert=True)
+        return
     try:
         item_id = int(callback.data.split("_")[-1])
     except ValueError:
         await callback.answer("Ошибка")
         return
-    
     item = await db.get_item_by_id(item_id)
     if not item:
         await callback.answer("Предмет не найден")
@@ -54,15 +63,17 @@ async def shop_item_view(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("shop_buy_"))
 async def shop_buy(callback: CallbackQuery) -> None:
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою! Сначала завершите поединок (выход = поражение).", show_alert=True)
+        return
     try:
         item_id = int(callback.data.split("_")[-1])
     except ValueError:
         await callback.answer("Ошибка")
-        return
-    
-    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
-    if not player:
-        await callback.answer("Сначала /start")
         return
     ok, msg = await db.buy_item(player["id"], item_id)
     if ok:
@@ -74,15 +85,17 @@ async def shop_buy(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("shop_sell_"))
 async def shop_sell(callback: CallbackQuery) -> None:
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою! Сначала завершите поединок (выход = поражение).", show_alert=True)
+        return
     try:
         inv_id = int(callback.data.split("_")[-1])
     except ValueError:
         await callback.answer("Ошибка")
-        return
-    
-    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
-    if not player:
-        await callback.answer("Сначала /start")
         return
     ok, msg, _ = await db.sell_item(player["id"], inv_id)
     if ok:
