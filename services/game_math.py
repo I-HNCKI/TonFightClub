@@ -11,7 +11,7 @@ from typing import TypedDict
 from services import battle_phrases
 
 
-class CombatStats(TypedDict):
+class CombatStats(TypedDict, total=False):
     strength: int
     agility: int
     intuition: int
@@ -22,6 +22,8 @@ class CombatStats(TypedDict):
     weapon_max: int
     armor: int
     level: int
+    crit_bonus: float
+    block_bonus: float
 
 
 class BattleMath:
@@ -110,10 +112,14 @@ class BattleMath:
             log.append(f"{name1} выпил зелье (Free Action).")
         else:
             blocked1 = BattleMath.zone_blocked(p1_attack_zone, p2_block_zone)
+            block_bonus2 = p2_stats.get("block_bonus", 0) or 0
+            if not blocked1 and block_bonus2 > 0 and random.random() * 100 < block_bonus2:
+                blocked1 = True
             base1 = BattleMath.base_damage(
                 p1_stats["weapon_min"], p1_stats["weapon_max"], p1_stats["strength"]
             )
-            crit1 = random.random() * 100 < BattleMath.crit_chance(p1_stats["intuition"])
+            crit_chance1 = BattleMath.crit_chance(p1_stats["intuition"]) + p1_stats.get("crit_bonus", 0)
+            crit1 = random.random() * 100 < crit_chance1
             if blocked1 and not crit1:
                 log.append(battle_phrases.build_exchange_line(name1, name2, "block"))
             else:
@@ -133,10 +139,14 @@ class BattleMath:
             log.append(f"{name2} выпил зелье (Free Action).")
         else:
             blocked2 = BattleMath.zone_blocked(p2_attack_zone, p1_block_zone)
+            block_bonus1 = p1_stats.get("block_bonus", 0) or 0
+            if not blocked2 and block_bonus1 > 0 and random.random() * 100 < block_bonus1:
+                blocked2 = True
             base2 = BattleMath.base_damage(
                 p2_stats["weapon_min"], p2_stats["weapon_max"], p2_stats["strength"]
             )
-            crit2 = random.random() * 100 < BattleMath.crit_chance(p2_stats["intuition"])
+            crit_chance2 = BattleMath.crit_chance(p2_stats["intuition"]) + p2_stats.get("crit_bonus", 0)
+            crit2 = random.random() * 100 < crit_chance2
             if blocked2 and not crit2:
                 log.append(battle_phrases.build_exchange_line(name2, name1, "block"))
             else:

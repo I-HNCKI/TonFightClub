@@ -1,6 +1,7 @@
 """
 Админ-панель. Владелец 306039666; права админа можно выдавать по Telegram ID.
 """
+import os
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.filters import Command, CommandObject
@@ -274,3 +275,27 @@ async def admins_list(message: Message) -> None:
     lines = [f"• {OWNER_ID} (владелец)"] + [f"• {tid}" for tid in ids]
     text = "👤 <b>Права админа</b>\n\n" + "\n".join(lines)
     await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("admin_users"))
+async def admin_users(message: Message) -> None:
+    """Список всех зарегистрированных игроков. Доступ только для ADMIN_ID из .env."""
+    try:
+        admin_id = int(os.getenv("ADMIN_ID", "0").strip())
+    except (ValueError, TypeError):
+        admin_id = 0
+    if not message.from_user or message.from_user.id != admin_id:
+        await message.answer("Команда не найдена.")
+        return
+    players = await db.get_all_players_with_level()
+    if not players:
+        await message.answer("Список игроков пуст.")
+        return
+    lines = []
+    for p in players:
+        username = p.get("username")
+        name = f"@{username}" if username and not username.startswith("@") else (username or "Боец")
+        tid = p.get("telegram_id", 0)
+        lvl = p.get("level", 1)
+        lines.append(f"👤 Игрок: {name} (ID: {tid}) | Уровень: {lvl}")
+    await message.answer("\n".join(lines), parse_mode="HTML")

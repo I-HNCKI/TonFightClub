@@ -34,9 +34,16 @@ async def get_telegram_id_by_player_id(db_inst: Database, player_id: int) -> int
         return row["telegram_id"] if row else None
 
 
-def _arena_kb(player_id: int, battle_id: int):
+BANDAGE_LIMIT = 2
+
+
+def _arena_kb(player_id: int, battle_id: int, battle: dict | None = None, bandage_remaining: int | None = None):
     sel = _arena_selection.get((player_id, battle_id), {})
-    return arena_move_keyboard(sel.get("atk"), sel.get("def"))
+    if bandage_remaining is None and battle:
+        is_p1 = battle["player1_id"] == player_id
+        used = battle.get("p1_bandage_uses" if is_p1 else "p2_bandage_uses", 0) or 0
+        bandage_remaining = max(0, BANDAGE_LIMIT - used)
+    return arena_move_keyboard(sel.get("atk"), sel.get("def"), bandage_remaining)
 
 
 @router.message(F.text == "🏟 Арена (PvP)")
@@ -73,7 +80,7 @@ async def arena_menu(message: Message) -> None:
             await message.delete()
         except Exception:
             pass
-        new_msg = await message.answer(txt, reply_markup=_arena_kb(player["id"], battle["id"]), parse_mode="HTML")
+        new_msg = await message.answer(txt, reply_markup=_arena_kb(player["id"], battle["id"], battle=battle), parse_mode="HTML")
         await db.set_battle_message_id(battle["id"], player["id"], new_msg.message_id)
         return
 
@@ -94,25 +101,29 @@ async def arena_find(callback: CallbackQuery) -> None:
         await callback.answer("🛑 Вы ранены! Подождите или выпейте эликсир.", show_alert=True)
         return
 
-    status, battle_id, msg = await db.arena_join_queue(player["id"], stake=100)
+    status, battle_id, msg = await db.arena_join_queue(player["id"], stake=10)
 
     if status == "no_credits":
+        await callback.answer(msg, show_alert=True)
+        return
+    if status == "no_match":
         await callback.answer(msg, show_alert=True)
         return
 
     if status == "waiting":
         await callback.message.edit_text(
-            "⏳ <b>Поиск соперника...</b>\nСтавка: 100 кр. Ожидайте.",
+            "⏳ <b>Поиск соперника...</b>\nСтавка: 10 кр. Ожидайте.",
             reply_markup=arena_keyboard(),
             parse_mode="HTML",
         )
+        await callback.answer()
         return
 
     if status == "matched" and battle_id:
         battle = await db.get_battle(battle_id)
         p1_tg = await get_telegram_id_by_player_id(db, battle["player1_id"])
         p2_tg = await get_telegram_id_by_player_id(db, battle["player2_id"])
-        stake = battle.get("stake") or 100
+        stake = battle.get("stake") or 10
         s1 = await db.get_combat_stats(battle["player1_id"], for_arena=True)
         s2 = await db.get_combat_stats(battle["player2_id"], for_arena=True)
         max1, max2 = s1.get("max_hp", 50), s2.get("max_hp", 50)
@@ -129,7 +140,7 @@ async def arena_find(callback: CallbackQuery) -> None:
             f"🆚 {battle['p1_name'] or 'Боец'}: {draw_hp_bar(battle['player1_hp'], max1)}\n\n"
             "👇 Выберите зону атаки и защиты:"
         )
-        kb = arena_move_keyboard(None, None)
+        kb = arena_move_keyboard(None, None, BANDAGE_LIMIT)
 
         if p1_tg:
             m = await callback.bot.send_message(p1_tg, txt1, reply_markup=kb, parse_mode="HTML")
@@ -143,6 +154,29 @@ async def arena_find(callback: CallbackQuery) -> None:
         except Exception:
             pass
     await callback.answer()
+
+
+@router.callback_query(F.data == "arena_leave")
+async def arena_cancel_search(callback: CallbackQuery) -> None:
+    """Отмена поиска: только если игрок в очереди, не в бою. Возврат ставки 10 кр."""
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.get_active_battle_for_player(player["id"]):
+        await callback.answer("Бой уже начался. Отмена невозможна.", show_alert=True)
+        return
+    ok, msg = await db.arena_leave_queue(player["id"], stake=10)
+    if not ok:
+        await callback.answer(msg, show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"✅ {msg}\n\n"
+        "🏟 <b>Арена PvP</b>\n\nНажмите «Найти соперника».",
+        reply_markup=arena_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer(msg)
 
 
 # Выбор зоны атаки/защиты (шахматка)
@@ -181,7 +215,7 @@ async def arena_select_zone(callback: CallbackQuery) -> None:
         f"Атака: {ZONE_NAMES.get(sel['atk'], '—')} | Защита: {ZONE_NAMES.get(sel['def'], '—')}\n\n"
         "👇 Выберите зоны и нажмите «ПОДТВЕРДИТЬ УДАР»:"
     )
-    await callback.message.edit_text(txt, reply_markup=_arena_kb(player["id"], battle["id"]), parse_mode="HTML")
+    await callback.message.edit_text(txt, reply_markup=_arena_kb(player["id"], battle["id"], battle=battle), parse_mode="HTML")
     await callback.answer()
 
 
@@ -200,7 +234,6 @@ async def arena_heal(callback: CallbackQuery) -> None:
         await callback.answer(msg, show_alert=True)
         return
     await callback.answer(msg)
-    # Перезагружаем бой для актуального HP
     battle = await db.get_battle(battle["id"])
     is_p1 = battle["player1_id"] == player["id"]
     my_hp = battle["player1_hp"] if is_p1 else battle["player2_hp"]
@@ -218,7 +251,7 @@ async def arena_heal(callback: CallbackQuery) -> None:
     try:
         await callback.message.edit_text(
             txt,
-            reply_markup=_arena_kb(player["id"], battle["id"]),
+            reply_markup=_arena_kb(player["id"], battle["id"], battle=battle),
             parse_mode="HTML",
         )
     except Exception:
@@ -285,7 +318,7 @@ async def arena_confirm_move(callback: CallbackQuery) -> None:
     )
 
     upd = await db.resolve_round_and_advance(b["id"], hp1_new, hp2_new)
-    stake = b.get("stake") or 100
+    stake = b.get("stake") or 10
     if upd["is_finished"] and upd.get("winner_id") and stake > 0:
         await db.resolve_arena_winner(b["id"], upd["winner_id"], stake)
     if upd["is_finished"]:
@@ -303,7 +336,15 @@ async def arena_confirm_move(callback: CallbackQuery) -> None:
     txt1 = txt_base + f"👤 Вы: {bar1}\n🆚 {name2}: {bar2}"
     txt2 = txt_base + f"👤 Вы: {bar2}\n🆚 {name1}: {bar1}"
 
-    kb = None if upd["is_finished"] else arena_move_keyboard(None, None)
+    def _bandage_left(b: dict, is_p1: bool) -> int:
+        col = "p1_bandage_uses" if is_p1 else "p2_bandage_uses"
+        used = b.get(col, 0) or 0
+        return max(0, BANDAGE_LIMIT - used)
+
+    kb_p1 = kb_p2 = None
+    if not upd["is_finished"]:
+        kb_p1 = arena_move_keyboard(None, None, _bandage_left(upd, True))
+        kb_p2 = arena_move_keyboard(None, None, _bandage_left(upd, False))
 
     bank = stake * 2
     winner_gain = bank - int(bank * 0.10)
@@ -312,6 +353,7 @@ async def arena_confirm_move(callback: CallbackQuery) -> None:
         if not tg_id:
             return
         my_id = b["player1_id"] if is_p1 else b["player2_id"]
+        kb = (kb_p1 if is_p1 else kb_p2) if not upd["is_finished"] else None
         if upd["is_finished"]:
             if upd["winner_id"] == my_id:
                 text += f"\n\n🏆 <b>ПОБЕДА!</b>\n{get_victory_phrase()}\n💰 Получено: {winner_gain} кр.\n👉 /arena"
@@ -407,5 +449,5 @@ async def arena_cancel_surrender(callback: CallbackQuery) -> None:
         f"👤 {opp_name}: {draw_hp_bar(opp_hp)}\n\n"
         "👇 Ваш ход:"
     )
-    await callback.message.edit_text(txt, reply_markup=_arena_kb(player["id"], battle["id"]), parse_mode="HTML")
+    await callback.message.edit_text(txt, reply_markup=_arena_kb(player["id"], battle["id"], battle=battle), parse_mode="HTML")
     await callback.answer("Отменено")

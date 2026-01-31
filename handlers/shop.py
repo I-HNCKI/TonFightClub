@@ -28,9 +28,10 @@ async def shop_menu(message: Message) -> None:
     stats = await db.get_combat_stats(player["id"])
     items = await db.get_shop_items()
     credits = stats.get("credits", 0)
+    player_class = player.get("player_class")
     await message.answer(
         f"🛒 <b>Магазин</b>\n\nВаши кредиты: {credits}\n\nВыберите предмет:",
-        reply_markup=shop_list_keyboard(items),
+        reply_markup=shop_list_keyboard(items, player_class),
         parse_mode="HTML",
     )
 
@@ -50,13 +51,32 @@ async def shop_item_view(callback: CallbackQuery) -> None:
     if not item:
         await callback.answer("Предмет не найден")
         return
-    text = (
-        f"<b>{item['name']}</b>\n"
-        f"Слот: {item['slot']}\n"
-        f"Урон: {item['min_damage']}-{item['max_damage']}\n"
-        f"Бонус силы: {item['bonus_str']}, бонус HP: {item['bonus_hp']}\n"
-        f"Цена: {item['price']} кр."
-    )
+    price = item.get("price", 0)
+    slot = item.get("slot", "")
+    min_level = item.get("min_level", 1) or 1
+    level_line = f"🎖 Требуемый уровень: {min_level}\n\n"
+    slot_names = {"head": "Голова (Шлем)", "body": "Тело (Доспех)", "legs": "Ноги (Обувь)", "weapon": "Оружие", "potion": "Зелье"}
+    slot_label = slot_names.get(slot, slot)
+    if slot == "potion":
+        heal_pct = item.get("heal_percent", 30) or 30
+        trauma = " Снимает травму." if item.get("removes_trauma") else ""
+        text = (
+            f"<b>🧪 {item['name']}</b>\n\n"
+            f"Восстанавливает <b>{heal_pct}%</b> от макс. HP.{trauma}\n"
+            "В бою: 1 раз за бой (не тратит ход).\n\n"
+            f"{level_line}<b>💰 Цена: {price} кредитов</b>"
+        )
+    else:
+        class_type = item.get("class_type", "all")
+        class_label = "Все" if class_type == "all" else {"rogue": "Ловкач", "tank": "Танк", "warrior": "Мастер"}.get(class_type, class_type)
+        dmg_line = f"Урон: {item['min_damage']}-{item['max_damage']}\n" if (item.get("min_damage") or item.get("max_damage")) else ""
+        armor_line = f"Броня: {item.get('armor', 0)}\n" if item.get("armor") else ""
+        text = (
+            f"<b>{item['name']}</b>\n"
+            f"Слот: {slot_label} | Класс: {class_label}\n"
+            f"{dmg_line}{armor_line}\n"
+            f"{level_line}<b>💰 Цена: {price} кредитов</b>"
+        )
     await callback.message.answer(text, reply_markup=shop_buy_keyboard(item_id), parse_mode="HTML")
     await callback.answer()
 
@@ -78,7 +98,10 @@ async def shop_buy(callback: CallbackQuery) -> None:
     ok, msg = await db.buy_item(player["id"], item_id)
     if ok:
         await callback.answer(msg)
-        await callback.message.edit_text(callback.message.text + "\n\n✅ " + msg, parse_mode="HTML")
+        await callback.message.edit_text(
+            callback.message.text + "\n\n✅ " + msg,
+            parse_mode="HTML",
+        )
     else:
         await callback.answer(msg, show_alert=True)
 

@@ -19,12 +19,18 @@ def _armor_percent(armor: int) -> int:
     return int(100 * armor / (armor + 50))
 
 
+_SLOT_NAMES = {"head": "Голова", "body": "Тело", "legs": "Ноги", "weapon": "Оружие", "potion": "Зелье"}
+
+
 def _inv_lines(items: list[dict]) -> list[str]:
     lines = []
     for inv in items:
-        parts = [f"• {inv['name']} ({inv['slot']})"]
+        slot_label = _SLOT_NAMES.get(inv.get("slot", ""), inv.get("slot", ""))
+        parts = [f"• {inv['name']} ({slot_label})"]
+        min_lvl = inv.get("min_level", 1)
+        parts.append(f" — 🎖 Требуемый уровень: {min_lvl}")
         if inv.get("min_damage") or inv.get("max_damage"):
-            parts.append(f" урон {inv['min_damage']}-{inv['max_damage']}")
+            parts.append(f", урон {inv['min_damage']}-{inv['max_damage']}")
         if inv.get("bonus_str"):
             parts.append(f", +{inv['bonus_str']} сил")
         if inv.get("bonus_hp"):
@@ -65,8 +71,12 @@ async def inv_list(message: Message) -> None:
     if potions:
         text_parts.append("\n\n🧪 <b>Зелья</b>\n")
         for p in potions:
-            text_parts.append(f"• {p['name']} x{p['quantity']}")
-        text_parts.append("\nВыпить зелье — HP 100%, снимает травму:")
+            if p.get("removes_trauma") and (p.get("heal_percent") or 0) >= 100:
+                desc = "⚠️ Нельзя использовать в бою. Исцеляет всё и снимает травмы."
+            else:
+                desc = "⚡️ Можно использовать в бою (до 2-х раз). Восстанавливает 30% HP."
+            text_parts.append(f"• {p['name']} x{p['quantity']} — {desc}")
+        text_parts.append("\nВыберите зелье, чтобы выпить:")
     text = "".join(text_parts)
 
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -100,18 +110,18 @@ async def potion_drink(callback: CallbackQuery) -> None:
         await callback.answer("Сначала /start")
         return
     if await db.has_active_fight(player["id"]):
-        await callback.answer("🛑 В бою зелье нельзя пить из инвентаря. Используйте кнопку «🧪 Хил».", show_alert=True)
+        await callback.answer("🛑 В бою зелье нельзя пить из инвентаря. Используйте кнопку «🧪 Хил» (только Бинты).", show_alert=True)
         return
     ok, msg = await db.use_potion(player["id"], item_id)
     if ok:
-        await callback.answer(msg)
+        await callback.answer(msg if len(msg) < 60 else "✅ Использовано")
         potions = await db.get_player_potions(player["id"])
         items = await db.get_player_inventory(player["id"])
-        text = "🎒 <b>Инвентарь</b>\n\n"
+        text = f"🎒 <b>Инвентарь</b>\n\n<b>✅ {msg}</b>\n\n"
         if items:
             text += "\n".join(_inv_lines(items)) + "\n\n"
         if potions:
-            text += "🧪 <b>Зелья</b>\n" + "\n".join(f"• {p['name']} x{p['quantity']}" for p in potions)
+            text += "🧪 <b>Зелья</b>\n" + "\n".join(f"• 🧪 {p['name']} x{p['quantity']}" for p in potions)
         else:
             text += "🧪 Зелья закончились."
         from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -151,7 +161,7 @@ async def inv_equip(callback: CallbackQuery) -> None:
         await callback.answer("Ошибка")
         return
     
-    ok = await db.set_equipped(inv_id, player["id"], True)
+    ok, msg = await db.set_equipped(inv_id, player["id"], True)
     if ok:
         items = await db.get_player_inventory(player["id"])
         await callback.message.edit_text(
@@ -159,9 +169,9 @@ async def inv_equip(callback: CallbackQuery) -> None:
             reply_markup=inventory_list_keyboard(items),
             parse_mode="HTML",
         )
-        await callback.answer("Надето")
+        await callback.answer(msg)
     else:
-        await callback.answer("Не найдено в инвентаре")
+        await callback.answer(msg, show_alert=True)
 
 
 @router.callback_query(F.data.startswith("inv_unequip_"))
@@ -181,7 +191,7 @@ async def inv_unequip(callback: CallbackQuery) -> None:
         await callback.answer("Ошибка")
         return
     
-    ok = await db.set_equipped(inv_id, player["id"], False)
+    ok, msg = await db.set_equipped(inv_id, player["id"], False)
     if ok:
         items = await db.get_player_inventory(player["id"])
         await callback.message.edit_text(
@@ -189,9 +199,9 @@ async def inv_unequip(callback: CallbackQuery) -> None:
             reply_markup=inventory_list_keyboard(items),
             parse_mode="HTML",
         )
-        await callback.answer("Снято")
+        await callback.answer(msg)
     else:
-        await callback.answer("Не найдено в инвентаре")
+        await callback.answer(msg, show_alert=True)
 
 
 @router.callback_query(F.data == "inv_back")

@@ -1,10 +1,11 @@
 """
 Entry point: bot, dp, database, routers.
+Переменные окружения из .env (python-dotenv). БД — только DB_URL.
 """
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # загружаем .env до импорта модулей, использующих os.getenv
 
 import asyncio
 import logging
