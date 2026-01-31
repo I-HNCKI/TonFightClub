@@ -1,19 +1,20 @@
 """
 Entry point: bot, dp, database, routers.
 """
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import asyncio
 import logging
-import os
 
-from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from database.db import db
 from handlers import start, profile, shadow_fight, arena, inventory, shop, top, admin, help
-
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,

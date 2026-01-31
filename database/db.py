@@ -18,12 +18,13 @@ class Database:
         self._pool: Optional[Pool] = None
 
     async def connect(self) -> None:
+        db_url = os.getenv("DB_URL", "").strip()
+        if not db_url:
+            raise ValueError("Set DB_URL in .env (e.g. postgresql+asyncpg://admin:pass@localhost/dbname)")
+        # asyncpg ожидает postgresql://, а не postgresql+asyncpg://
+        dsn = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
         self._pool = await asyncpg.create_pool(
-            host=os.getenv("DB_HOST", "localhost"),
-            port=int(os.getenv("DB_PORT", "5432")),
-            database=os.getenv("DB_NAME", "combats_db"),
-            user=os.getenv("DB_USER"),
-            password=os.getenv("DB_PASS"),
+            dsn=dsn,
             min_size=1,
             max_size=10,
             command_timeout=60,
