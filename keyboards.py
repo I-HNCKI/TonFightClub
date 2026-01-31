@@ -161,7 +161,7 @@ def inventory_back_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-# ----- Shop -----
+# ----- Shop: каталог по категориям (Оружие, Одежда, Эликсиры) -----
 def shop_buy_keyboard(item_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Купить", callback_data=f"shop_buy_{item_id}"))
@@ -171,6 +171,51 @@ def shop_buy_keyboard(item_id: int) -> InlineKeyboardMarkup:
 def shop_sell_keyboard(inv_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Продать (50%)", callback_data=f"shop_sell_{inv_id}"))
+    return builder.as_markup()
+
+
+def shop_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное меню магазина: Оружие, Одежда, Эликсиры."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⚔️ Оружие", callback_data="shop_cat:weapons:lvl:1"),
+        InlineKeyboardButton(text="🛡️ Одежда", callback_data="shop_cat:armor:lvl:1"),
+    )
+    builder.row(InlineKeyboardButton(text="🧪 Эликсиры", callback_data="shop_cat:elixirs"))
+    return builder.as_markup()
+
+
+def shop_category_level_keyboard(
+    items_page: list[dict],
+    category: str,
+    level: int,
+    max_level: int = 5,
+) -> InlineKeyboardMarkup:
+    """Клавиатура категории (оружие/одежда): Купить по предметам + ⬅️ Ур. n-1 / Ур. n+1 ➡️ + 🔙 Назад."""
+    builder = InlineKeyboardBuilder()
+    for it in items_page:
+        builder.row(
+            InlineKeyboardButton(text=f"Купить: {it['name']}", callback_data=f"shop_buy_{it['id']}"),
+        )
+    row_nav = []
+    if level > 1:
+        row_nav.append(InlineKeyboardButton(text=f"⬅️ Ур. {level - 1}", callback_data=f"shop_cat:{category}:lvl:{level - 1}"))
+    if level < max_level:
+        row_nav.append(InlineKeyboardButton(text=f"Ур. {level + 1} ➡️", callback_data=f"shop_cat:{category}:lvl:{level + 1}"))
+    if row_nav:
+        builder.row(*row_nav)
+    builder.row(InlineKeyboardButton(text="🔙 Назад в меню", callback_data="shop_cat:main"))
+    return builder.as_markup()
+
+
+def shop_elixirs_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """Эликсиры: Купить по каждому + 🔙 Назад."""
+    builder = InlineKeyboardBuilder()
+    for it in items:
+        builder.row(
+            InlineKeyboardButton(text=f"Купить: {it['name']}", callback_data=f"shop_buy_{it['id']}"),
+        )
+    builder.row(InlineKeyboardButton(text="🔙 Назад в меню", callback_data="shop_cat:main"))
     return builder.as_markup()
 
 
@@ -189,25 +234,4 @@ def shop_list_keyboard(items: list[dict], player_class: str | None = None) -> In
                 callback_data=f"shop_item_{it['id']}",
             )
         )
-    return builder.as_markup()
-
-
-def shop_list_keyboard_paginated(items_page: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
-    """Клавиатура магазина по 5 предметов: кнопки «Купить: {name}» + навигация ⬅️ ➡️."""
-    builder = InlineKeyboardBuilder()
-    for it in items_page:
-        builder.row(
-            InlineKeyboardButton(
-                text=f"Купить: {it['name']}",
-                callback_data=f"shop_buy_{it['id']}",
-            )
-        )
-    if total_pages > 1:
-        row = []
-        if page > 1:
-            row.append(InlineKeyboardButton(text="⬅️", callback_data=f"shop_page_{page - 1}"))
-        if page < total_pages:
-            row.append(InlineKeyboardButton(text="➡️", callback_data=f"shop_page_{page + 1}"))
-        if row:
-            builder.row(*row)
     return builder.as_markup()

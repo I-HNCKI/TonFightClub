@@ -1,37 +1,90 @@
 """
-Shop: buy items, sell items (50% price). Пагинация по 5 предметов на страницу.
+Shop: каталог по категориям — Оружие, Одежда, Эликсиры. Пагинация по уровням (1–5) для оружия и одежды.
 """
 import re
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 
-from keyboards import shop_buy_keyboard, shop_list_keyboard_paginated
+from keyboards import (
+    shop_buy_keyboard,
+    shop_main_menu_keyboard,
+    shop_category_level_keyboard,
+    shop_elixirs_keyboard,
+)
 from database.db import db
 
 router = Router(name="shop")
 
-SHOP_PAGE_SIZE = 5
+SHOP_MAX_LEVEL = 5
 
 
-def _shop_item_line(it: dict) -> str:
-    """Одна строка списка: 🧪 Малое зелье (+50% ❤️) — 5 💰 или Оружие — 1 💰."""
-    if it.get("slot") == "potion":
-        hp = it.get("heal_percent") or 30
-        return f"🧪 {it['name']} (+{hp}% ❤️) — {it['price']} 💰"
+def _elixir_line(it: dict) -> str:
+    """Строка эликсира: 🧪 Бинты (+30% ❤️) — 5 💰."""
+    hp = it.get("heal_percent") or 30
+    return f"🧪 {it['name']} (+{hp}% ❤️) — {it['price']} 💰"
+
+
+def _item_line(it: dict) -> str:
+    """Строка предмета: Название — цена 💰."""
     return f"{it['name']} — {it['price']} 💰"
 
 
-def _shop_page_text(items_page: list[dict], credits: int, page: int, total_pages: int) -> str:
+def _main_menu_text(credits: int) -> str:
+    return (
+        "🛒 <b>Магазин</b>\n\n"
+        f"Ваши кредиты: {credits}\n\n"
+        "Выберите категорию:"
+    )
+
+
+def _category_level_text(
+    items: list[dict],
+    credits: int,
+    category_label: str,
+    level: int,
+    is_elixirs: bool = False,
+) -> str:
+    lines = [
+        f"Ваши кредиты: {credits}\n",
+        f"--- [ {category_label}: УРОВЕНЬ {level} ] ---\n" if not is_elixirs else f"--- [ {category_label} ] ---\n",
+    ]
+    if is_elixirs:
+        for it in items:
+            lines.append(_elixir_line(it))
+    else:
+        if not items:
+            lines.append("Нет предметов для этого уровня.")
+        else:
+            for it in items:
+                lines.append(_item_line(it))
+    return "\n".join(lines)
+
+
+def _elixirs_text(items: list[dict], credits: int) -> str:
     lines = [
         "🛒 <b>Магазин</b>\n",
         f"Ваши кредиты: {credits}\n",
-        "Выберите предмет:",
+        "--- [ 🧪 ЭЛИКСИРЫ ] ---\n",
     ]
-    for it in items_page:
-        lines.append(_shop_item_line(it))
-    lines.append(f"\nСтр. {page}/{total_pages}")
+    for it in items:
+        lines.append(_elixir_line(it))
     return "\n".join(lines)
+
+
+def _parse_shop_context_from_text(text: str | None) -> tuple[str | None, int | None]:
+    """Из текста сообщения определить контекст: (category, level) или (None, None) для главного меню."""
+    if not text:
+        return None, None
+    m = re.search(r"ОРУЖИЕ: УРОВЕНЬ\s*(\d+)", text, re.IGNORECASE)
+    if m:
+        return "weapons", int(m.group(1))
+    m = re.search(r"ОДЕЖДА: УРОВЕНЬ\s*(\d+)", text, re.IGNORECASE)
+    if m:
+        return "armor", int(m.group(1))
+    if "ЭЛИКСИРЫ" in text.upper():
+        return "elixirs", None
+    return None, None
 
 
 @router.message(F.text == "🛒 Магазин")
@@ -48,22 +101,33 @@ async def shop_menu(message: Message) -> None:
         )
         return
     stats = await db.get_combat_stats(player["id"])
-    items = await db.get_shop_items()
     credits = stats.get("credits", 0)
-    total_pages = max(1, (len(items) + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
-    page = 1
-    chunk = items[(page - 1) * SHOP_PAGE_SIZE : page * SHOP_PAGE_SIZE]
-    text = _shop_page_text(chunk, credits, page, total_pages)
     await message.answer(
-        text,
-        reply_markup=shop_list_keyboard_paginated(chunk, page, total_pages),
+        _main_menu_text(credits),
+        reply_markup=shop_main_menu_keyboard(),
         parse_mode="HTML",
     )
 
 
-@router.callback_query(F.data.startswith("shop_page_"))
-async def shop_page(callback: CallbackQuery) -> None:
-    """Пагинация магазина: обновить сообщение на страницу N."""
+@router.callback_query(F.data == "shop_cat:main")
+async def shop_cat_main(callback: CallbackQuery) -> None:
+    """Возврат в главное меню магазина."""
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    stats = await db.get_combat_stats(player["id"])
+    credits = stats.get("credits", 0)
+    await callback.message.edit_text(
+        _main_menu_text(credits),
+        reply_markup=shop_main_menu_keyboard(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop_cat:weapons:lvl:"))
+async def shop_cat_weapons(callback: CallbackQuery) -> None:
     player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
     if not player:
         await callback.answer("Сначала /start")
@@ -72,17 +136,63 @@ async def shop_page(callback: CallbackQuery) -> None:
         await callback.answer("🛑 Вы в бою!", show_alert=True)
         return
     try:
-        page = int(callback.data.replace("shop_page_", ""))
-    except ValueError:
-        page = 1
+        level = int(callback.data.split(":")[-1])
+    except (ValueError, IndexError):
+        level = 1
+    level = max(1, min(level, SHOP_MAX_LEVEL))
+    all_items = await db.get_shop_items()
+    items = db.get_shop_items_by_category(all_items, "weapons")
+    items_level = [i for i in items if (i.get("min_level") or 1) == level]
     stats = await db.get_combat_stats(player["id"])
-    items = await db.get_shop_items()
     credits = stats.get("credits", 0)
-    total_pages = max(1, (len(items) + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
-    page = max(1, min(page, total_pages))
-    chunk = items[(page - 1) * SHOP_PAGE_SIZE : page * SHOP_PAGE_SIZE]
-    text = _shop_page_text(chunk, credits, page, total_pages)
-    kb = shop_list_keyboard_paginated(chunk, page, total_pages)
+    text = _category_level_text(items_level, credits, "⚔️ ОРУЖИЕ", level, is_elixirs=False)
+    text = "🛒 <b>Магазин</b>\n\n" + text
+    kb = shop_category_level_keyboard(items_level, "weapons", level, SHOP_MAX_LEVEL)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop_cat:armor:lvl:"))
+async def shop_cat_armor(callback: CallbackQuery) -> None:
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою!", show_alert=True)
+        return
+    try:
+        level = int(callback.data.split(":")[-1])
+    except (ValueError, IndexError):
+        level = 1
+    level = max(1, min(level, SHOP_MAX_LEVEL))
+    all_items = await db.get_shop_items()
+    items = db.get_shop_items_by_category(all_items, "armor")
+    items_level = [i for i in items if (i.get("min_level") or 1) == level]
+    stats = await db.get_combat_stats(player["id"])
+    credits = stats.get("credits", 0)
+    text = _category_level_text(items_level, credits, "🛡️ ОДЕЖДА", level, is_elixirs=False)
+    text = "🛒 <b>Магазин</b>\n\n" + text
+    kb = shop_category_level_keyboard(items_level, "armor", level, SHOP_MAX_LEVEL)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "shop_cat:elixirs")
+async def shop_cat_elixirs(callback: CallbackQuery) -> None:
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою!", show_alert=True)
+        return
+    all_items = await db.get_shop_items()
+    items = db.get_shop_items_by_category(all_items, "elixirs")
+    stats = await db.get_combat_stats(player["id"])
+    credits = stats.get("credits", 0)
+    text = _elixirs_text(items, credits)
+    kb = shop_elixirs_keyboard(items)
     await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
@@ -132,14 +242,6 @@ async def shop_item_view(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-def _parse_shop_page_from_text(text: str | None) -> int:
-    """Из текста сообщения магазина извлечь номер страницы (Стр. N/M)."""
-    if not text:
-        return 1
-    m = re.search(r"Стр\.\s*(\d+)/\d+", text)
-    return int(m.group(1)) if m else 1
-
-
 @router.callback_query(F.data.startswith("shop_buy_"))
 async def shop_buy(callback: CallbackQuery) -> None:
     player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
@@ -157,17 +259,35 @@ async def shop_buy(callback: CallbackQuery) -> None:
     ok, msg = await db.buy_item(player["id"], item_id)
     if ok:
         await callback.answer(msg)
-        # Если сообщение — страница магазина, обновляем её (актуальные кредиты и клавиатура)
-        page = _parse_shop_page_from_text(callback.message.text)
+        # Обновить текущий экран магазина (главное меню или категория)
+        cat, lvl = _parse_shop_context_from_text(callback.message.text)
         stats = await db.get_combat_stats(player["id"])
-        items = await db.get_shop_items()
         credits = stats.get("credits", 0)
-        total_pages = max(1, (len(items) + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
-        page = max(1, min(page, total_pages))
-        chunk = items[(page - 1) * SHOP_PAGE_SIZE : page * SHOP_PAGE_SIZE]
-        text = _shop_page_text(chunk, credits, page, total_pages) + "\n\n✅ " + msg
-        kb = shop_list_keyboard_paginated(chunk, page, total_pages)
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        if cat is None:
+            await callback.message.edit_text(
+                _main_menu_text(credits) + "\n\n✅ " + msg,
+                reply_markup=shop_main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+        elif cat == "elixirs":
+            all_items = await db.get_shop_items()
+            items = db.get_shop_items_by_category(all_items, "elixirs")
+            await callback.message.edit_text(
+                _elixirs_text(items, credits) + "\n\n✅ " + msg,
+                reply_markup=shop_elixirs_keyboard(items),
+                parse_mode="HTML",
+            )
+        else:
+            level = lvl or 1
+            level = max(1, min(level, SHOP_MAX_LEVEL))
+            all_items = await db.get_shop_items()
+            items = db.get_shop_items_by_category(all_items, cat)
+            items_level = [i for i in items if (i.get("min_level") or 1) == level]
+            label = "⚔️ ОРУЖИЕ" if cat == "weapons" else "🛡️ ОДЕЖДА"
+            text = _category_level_text(items_level, credits, label, level, is_elixirs=False)
+            text = "🛒 <b>Магазин</b>\n\n" + text + "\n\n✅ " + msg
+            kb = shop_category_level_keyboard(items_level, cat, level, SHOP_MAX_LEVEL)
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await callback.answer(msg, show_alert=True)
 

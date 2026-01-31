@@ -830,8 +830,18 @@ class Database:
 
     async def get_shop_items(self) -> list[dict]:
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("SELECT * FROM items ORDER BY price")
+            rows = await conn.fetch("SELECT * FROM items ORDER BY min_level, price")
             return [dict(r) for r in rows]
+
+    def get_shop_items_by_category(self, items: list[dict], category: str) -> list[dict]:
+        """Фильтр по категории: weapons (weapon), armor (head/body/legs), elixirs (potion)."""
+        if category == "weapons":
+            return [i for i in items if i.get("slot") == "weapon"]
+        if category == "armor":
+            return [i for i in items if i.get("slot") in ("head", "body", "legs")]
+        if category == "elixirs":
+            return [i for i in items if i.get("slot") == "potion"]
+        return []
 
     async def get_all_items_dict(self) -> list[dict]:
         """Список всех предметов (id, name, type/slot) для админки."""
