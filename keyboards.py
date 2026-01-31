@@ -19,6 +19,7 @@ def main_menu() -> ReplyKeyboardMarkup:
         KeyboardButton(text="🛒 Магазин"),
         KeyboardButton(text="🏆 Топ игроков"),
     )
+    builder.row(KeyboardButton(text="🆘 Помощь"))
     return builder.as_markup(resize_keyboard=True)
 
 

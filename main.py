@@ -11,7 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from database.db import db
-from handlers import start, profile, shadow_fight, arena, inventory, shop, top, admin
+from handlers import start, profile, shadow_fight, arena, inventory, shop, top, admin, help
 
 load_dotenv()
 
@@ -43,6 +43,7 @@ async def main() -> None:
     dp.include_router(shop.router)
     dp.include_router(top.router)
     dp.include_router(admin.router)
+    dp.include_router(help.router)
 
     try:
         logger.info("Bot starting...")

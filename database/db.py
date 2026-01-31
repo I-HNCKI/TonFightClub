@@ -169,6 +169,12 @@ class Database:
                     total_commission INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            # Админы, назначенные владельцем (владелец 306039666 — единственный в коде)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS admin_users (
+                    telegram_id BIGINT PRIMARY KEY
+                )
+            """)
             try:
                 await conn.execute("ALTER TABLE battles ADD COLUMN IF NOT EXISTS stake INTEGER NOT NULL DEFAULT 0")
                 await conn.execute("ALTER TABLE items ADD COLUMN IF NOT EXISTS armor INTEGER NOT NULL DEFAULT 0")
@@ -625,6 +631,56 @@ class Database:
             rows = await conn.fetch("SELECT * FROM items ORDER BY price")
             return [dict(r) for r in rows]
 
+    async def get_all_items_dict(self) -> list[dict]:
+        """Список всех предметов (id, name, type/slot) для админки."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id, name, slot FROM items ORDER BY id")
+            return [{"id": r["id"], "name": r["name"], "type": r["slot"]} for r in rows]
+
+    async def admin_add_money(self, user_id: int, amount: int) -> bool:
+        """Добавляет сумму к балансу игрока по Telegram ID. user_id = telegram_id."""
+        player = await self.get_player_by_telegram_id(user_id)
+        if not player:
+            return False
+        await self.add_credits(player["id"], amount)
+        return True
+
+    async def admin_add_item(self, user_id: int, item_id: int) -> bool:
+        """Добавляет предмет игроку по Telegram ID. Зелья — в player_potions, остальное — в inventory."""
+        player = await self.get_player_by_telegram_id(user_id)
+        if not player:
+            return False
+        item = await self.get_item_by_id(item_id)
+        if not item:
+            return False
+        pid = player["id"]
+        if item.get("slot") == "potion":
+            await self.add_potion(pid, item_id, 1)
+        else:
+            await self.add_item_to_inventory(pid, item_id, is_equipped=False)
+        return True
+
+    async def create_custom_item(
+        self, name: str, item_type: str, stat: int, price: int = 0
+    ) -> Optional[int]:
+        """
+        Создать уникальный предмет. type='weapon' -> damage=stat (min/max);
+        type='armor' -> armor=stat, slot=chest. Возвращает item_id или None.
+        """
+        slot = "weapon" if item_type == "weapon" else "chest"
+        min_dmg = max_dmg = stat if item_type == "weapon" else 0
+        armor_val = stat if item_type == "armor" else 0
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO items (name, slot, min_damage, max_damage, bonus_str, bonus_hp, armor, price)
+                VALUES ($1, $2, $3, $4, 0, 0, $5, $6)
+                RETURNING id
+                """,
+                name, slot, min_dmg, max_dmg, armor_val, price,
+            )
+            return row["id"] if row else None
+
     # ----- System balance -----
     async def get_system_commission(self) -> int:
         async with self.pool.acquire() as conn:
@@ -675,6 +731,43 @@ class Database:
                 limit,
             )
             return [dict(r) for r in rows]
+
+    # ----- Admin users (назначенные владельцем) -----
+    async def is_admin(self, telegram_id: int) -> bool:
+        """True если пользователь в таблице admin_users (права выданы владельцем)."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM admin_users WHERE telegram_id = $1",
+                telegram_id,
+            )
+            return row is not None
+
+    async def add_admin(self, telegram_id: int) -> bool:
+        """Добавить админа по Telegram ID. Возвращает True если добавлен."""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO admin_users (telegram_id) VALUES ($1) ON CONFLICT (telegram_id) DO NOTHING",
+                    telegram_id,
+                )
+            return True
+        except Exception:
+            return False
+
+    async def remove_admin(self, telegram_id: int) -> bool:
+        """Убрать права админа по Telegram ID."""
+        async with self.pool.acquire() as conn:
+            r = await conn.execute(
+                "DELETE FROM admin_users WHERE telegram_id = $1",
+                telegram_id,
+            )
+            return r == "DELETE 1"
+
+    async def get_admin_ids(self) -> list[int]:
+        """Список Telegram ID всех назначенных админов."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT telegram_id FROM admin_users ORDER BY telegram_id")
+            return [r["telegram_id"] for r in rows]
 
     # ----- Shadow fight (PvE vs AI) -----
     async def get_shadow_fight(self, fight_id: int) -> Optional[dict]:
