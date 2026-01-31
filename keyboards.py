@@ -190,3 +190,24 @@ def shop_list_keyboard(items: list[dict], player_class: str | None = None) -> In
             )
         )
     return builder.as_markup()
+
+
+def shop_list_keyboard_paginated(items_page: list[dict], page: int, total_pages: int) -> InlineKeyboardMarkup:
+    """Клавиатура магазина по 5 предметов: кнопки «Купить: {name}» + навигация ⬅️ ➡️."""
+    builder = InlineKeyboardBuilder()
+    for it in items_page:
+        builder.row(
+            InlineKeyboardButton(
+                text=f"Купить: {it['name']}",
+                callback_data=f"shop_buy_{it['id']}",
+            )
+        )
+    if total_pages > 1:
+        row = []
+        if page > 1:
+            row.append(InlineKeyboardButton(text="⬅️", callback_data=f"shop_page_{page - 1}"))
+        if page < total_pages:
+            row.append(InlineKeyboardButton(text="➡️", callback_data=f"shop_page_{page + 1}"))
+        if row:
+            builder.row(*row)
+    return builder.as_markup()

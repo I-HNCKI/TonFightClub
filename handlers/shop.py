@@ -1,14 +1,37 @@
 """
-Shop: buy items, sell items (50% price).
+Shop: buy items, sell items (50% price). Пагинация по 5 предметов на страницу.
 """
+import re
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 
-from keyboards import shop_buy_keyboard, shop_list_keyboard
+from keyboards import shop_buy_keyboard, shop_list_keyboard_paginated
 from database.db import db
 
 router = Router(name="shop")
+
+SHOP_PAGE_SIZE = 5
+
+
+def _shop_item_line(it: dict) -> str:
+    """Одна строка списка: 🧪 Малое зелье (+50% ❤️) — 5 💰 или Оружие — 1 💰."""
+    if it.get("slot") == "potion":
+        hp = it.get("heal_percent") or 30
+        return f"🧪 {it['name']} (+{hp}% ❤️) — {it['price']} 💰"
+    return f"{it['name']} — {it['price']} 💰"
+
+
+def _shop_page_text(items_page: list[dict], credits: int, page: int, total_pages: int) -> str:
+    lines = [
+        "🛒 <b>Магазин</b>\n",
+        f"Ваши кредиты: {credits}\n",
+        "Выберите предмет:",
+    ]
+    for it in items_page:
+        lines.append(_shop_item_line(it))
+    lines.append(f"\nСтр. {page}/{total_pages}")
+    return "\n".join(lines)
 
 
 @router.message(F.text == "🛒 Магазин")
@@ -24,16 +47,44 @@ async def shop_menu(message: Message) -> None:
             parse_mode="HTML",
         )
         return
-        
     stats = await db.get_combat_stats(player["id"])
     items = await db.get_shop_items()
     credits = stats.get("credits", 0)
-    player_class = player.get("player_class")
+    total_pages = max(1, (len(items) + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
+    page = 1
+    chunk = items[(page - 1) * SHOP_PAGE_SIZE : page * SHOP_PAGE_SIZE]
+    text = _shop_page_text(chunk, credits, page, total_pages)
     await message.answer(
-        f"🛒 <b>Магазин</b>\n\nВаши кредиты: {credits}\n\nВыберите предмет:",
-        reply_markup=shop_list_keyboard(items, player_class),
+        text,
+        reply_markup=shop_list_keyboard_paginated(chunk, page, total_pages),
         parse_mode="HTML",
     )
+
+
+@router.callback_query(F.data.startswith("shop_page_"))
+async def shop_page(callback: CallbackQuery) -> None:
+    """Пагинация магазина: обновить сообщение на страницу N."""
+    player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
+    if not player:
+        await callback.answer("Сначала /start")
+        return
+    if await db.has_active_fight(player["id"]):
+        await callback.answer("🛑 Вы в бою!", show_alert=True)
+        return
+    try:
+        page = int(callback.data.replace("shop_page_", ""))
+    except ValueError:
+        page = 1
+    stats = await db.get_combat_stats(player["id"])
+    items = await db.get_shop_items()
+    credits = stats.get("credits", 0)
+    total_pages = max(1, (len(items) + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    chunk = items[(page - 1) * SHOP_PAGE_SIZE : page * SHOP_PAGE_SIZE]
+    text = _shop_page_text(chunk, credits, page, total_pages)
+    kb = shop_list_keyboard_paginated(chunk, page, total_pages)
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("shop_item_"))
@@ -81,6 +132,14 @@ async def shop_item_view(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+def _parse_shop_page_from_text(text: str | None) -> int:
+    """Из текста сообщения магазина извлечь номер страницы (Стр. N/M)."""
+    if not text:
+        return 1
+    m = re.search(r"Стр\.\s*(\d+)/\d+", text)
+    return int(m.group(1)) if m else 1
+
+
 @router.callback_query(F.data.startswith("shop_buy_"))
 async def shop_buy(callback: CallbackQuery) -> None:
     player = await db.get_player_by_telegram_id(callback.from_user.id if callback.from_user else 0)
@@ -98,10 +157,17 @@ async def shop_buy(callback: CallbackQuery) -> None:
     ok, msg = await db.buy_item(player["id"], item_id)
     if ok:
         await callback.answer(msg)
-        await callback.message.edit_text(
-            callback.message.text + "\n\n✅ " + msg,
-            parse_mode="HTML",
-        )
+        # Если сообщение — страница магазина, обновляем её (актуальные кредиты и клавиатура)
+        page = _parse_shop_page_from_text(callback.message.text)
+        stats = await db.get_combat_stats(player["id"])
+        items = await db.get_shop_items()
+        credits = stats.get("credits", 0)
+        total_pages = max(1, (len(items) + SHOP_PAGE_SIZE - 1) // SHOP_PAGE_SIZE)
+        page = max(1, min(page, total_pages))
+        chunk = items[(page - 1) * SHOP_PAGE_SIZE : page * SHOP_PAGE_SIZE]
+        text = _shop_page_text(chunk, credits, page, total_pages) + "\n\n✅ " + msg
+        kb = shop_list_keyboard_paginated(chunk, page, total_pages)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await callback.answer(msg, show_alert=True)
 
